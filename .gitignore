@@ -155,3 +155,5 @@ cython_debug/
 .DS_Store
 saved_models/
 class_names.npy
+*.json
+tmp/

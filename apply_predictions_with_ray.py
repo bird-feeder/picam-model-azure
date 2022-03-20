@@ -33,6 +33,14 @@ def keyboard_interrupt_handler(sig, frame):
     sys.exit(0)
 
 
+def bot_message(message):
+  url = 'https://eohupps8bwvavi2.m.pipedream.net'
+  headers = requests.structures.CaseInsensitiveDict()
+  headers['Content-type'] = 'text/plain'
+  res = requests.post(url, message, headers=headers)
+  return res.text
+
+
 def mkdirs():
     Path('tmp').mkdir(exist_ok=True)
     Path('tmp/downloaded').mkdir(exist_ok=True)
@@ -49,13 +57,36 @@ def make_headers():
 
 def get_all_tasks(headers, project_id):
     logger.debug('Getting tasks data... This might take few minutes...')
-    url = f'{os.environ["LS_HOST"]}/api/projects/{project_id}/tasks?page_size=10000'
-    resp = requests.get(url,
-                        headers=headers,
-                        data=json.dumps({'project': project_id}))
-    with open('tasks_latest.json', 'w') as j:
-        json.dump(resp.json(), j)
-    return resp.json()
+    url = f'{os.environ["LS_HOST"]}/api/projects/{project_id}/'
+    resp = requests.get(url, headers=headers)
+    tasks_len = resp.json()['task_number']
+
+    res_lists = []
+    progress_bar = tqdm(total=tasks_len)
+    step = 100
+    page = 1
+    steps = 0
+
+    while True:
+        url = f'{os.environ["LS_HOST"]}/api/projects/{project_id}/tasks?page_size={step}&page={page}'
+        resp = requests.get(url, headers=headers)
+        try:
+            res_lists.append(resp.json())
+        except requests.exceptions.JSONDecodeError:
+            break
+
+        page += 1
+        progress_bar.update(step)
+        steps += step
+        if steps >= tasks_len:
+            break
+        if page == 3:
+            break
+
+    res_lists = sum(res_lists, [])
+    with open('latest_tasks.json', 'w') as j:
+        json.dump(res_lists, j)
+    return res_lists
 
 
 def find_image(img_name):
@@ -283,6 +314,11 @@ def opts():
                         '--class-names',
                         help='Path to class names in .npy format',
                         type=str)
+
+    parser.add_argument('-e',
+                    '--exported-tasks',
+                    help='Project exported tasks JSON file path',
+                    type=str)
     return parser.parse_args()
 
 
@@ -334,9 +370,7 @@ if __name__ == '__main__':
     MODEL_PATH = args.model_path
     class_names = args.class_names
 
-    logging.basicConfig(filename=f'{Path(__file__).stem}.log',
-                        filemode='a',
-                        level='NOTSET',
+    logging.basicConfig(level='NOTSET',
                         format='%(message)s',
                         datefmt='[%X]',
                         handlers=[RichHandler()])
@@ -365,8 +399,9 @@ if __name__ == '__main__':
     try:
         project_tasks = get_all_tasks(headers, args.project_id)
     except requests.exceptions.JSONDecodeError as e:
-        logger.exception(e)
-        logger.error('Failed to connect to label-studio!')
+        logger.error(e)
+        bot_message(f'TIMEOUT ERROR! Check if label-studio is online, then try again...\n{e}')
+        logger.error('TIMEOUT ERROR! Failed to connect to label-studio!')
         logger.error('Check if label-studio is online then try again...')
         ray.shutdown()
         sys.exit(1)
@@ -386,7 +421,7 @@ if __name__ == '__main__':
         try:
             POST_DICTS = predict_batch(BATCH)
         except IndexError as e:
-            logger.exception(e)
+            logger.debug(e)
             continue
 
         logger.info('Posting the batch results to label-studio...')
@@ -401,3 +436,4 @@ if __name__ == '__main__':
 
     ray.shutdown()
     shutil.rmtree('tmp', ignore_errors=True)
+    bot_message('Task completed successfully! You can safely stop the compute instance in few minutes...')
